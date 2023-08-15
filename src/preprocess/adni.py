@@ -5,7 +5,7 @@ from src.preprocess.util import encode
 
 RAW_PATH = Path(__file__).parent.parent.parent / "data" / "adni" / "raw"
 
-def load_adni(filename="ADNIMERGE.csv"):
+def load_adni(filename="ADNIMERGE"):
     """Load ADNI data from csv file
 
     Parameters
