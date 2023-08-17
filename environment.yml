@@ -48,5 +48,5 @@ dependencies:
       - umap-learn
       - matplotlib
       - seaborn
-      - jupyterlab
+      - jupyter
 prefix: /opt/homebrew/Caskroom/miniconda/base/envs/cpr
