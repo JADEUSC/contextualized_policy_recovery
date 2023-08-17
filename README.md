@@ -5,6 +5,7 @@ This repository contains the code for replicating the results presented in the m
 ## Installation
 
 ```bash
+cd contextualized_policy_recovery
 conda env create -f environment.yml
 conda activate cpr
 pip install --no-build-isolation --disable-pip-version-check -e .
