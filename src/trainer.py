@@ -111,7 +111,7 @@ def L1_bce(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, lamb:floa
 def train_contextual(exp_name:str, input_size:int, context_size:int, train_loader:torch.utils.data.DataLoader, 
                      val_loader:torch.utils.data.DataLoader, lr:float=5e-4, rnn_type:str="LSTM", 
                      hidden_dims:List[int]=[16, 32, 64], lambdas:List[int]=[0.0001, 0.001, 0.01, 0.1], 
-                     bootstrap:Optional[int]=None):
+                     bootstrap:Optional[int]=None, implicit_theta=False):
     """Train a contextualized model.
 
     Parameters
@@ -136,6 +136,8 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
         List of regularization values lambdas. Defaults to [0, 0.001, 0.01, 0.1].
     bootstrap : int, optional
         Number of bootstrap run. Defaults to None.
+    implicit_theta: bool, optional
+        Run as a vanilla RNN where theta is given post-hoc as the derivative of log(p(a=1|x)/p(a=0|x)) wrt x.
     """
 
     for hidden_dim in hidden_dims:
@@ -149,7 +151,7 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                 continue
             
             model = contextualized_sigmoid(hidden_dim=hidden_dim, type=rnn_type, input_size=input_size, 
-                                           context_size=context_size)
+                                           context_size=context_size, implicit_theta=implicit_theta)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
             best_prev = 1000
@@ -188,7 +190,6 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                     thetas = torch.stack(thetas)
                     thetas = thetas.permute(1,0,2)
 
-
                     loss = L1_bce(pred=probs, target=targets, theta=thetas, lamb=lamb, mask=mask)
                     loss.backward()
                     loss_train += loss.item()
@@ -197,43 +198,45 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                 
                 train_losses.append(loss_train/item)
             
-                with torch.no_grad():
-                    v_losses = []
-                    for context, features, targets, _, mask, static in val_loader:
+                # with torch.no_grad():
+                optimizer.zero_grad()
+                v_losses = []
+                for context, features, targets, _, mask, static in val_loader:
 
-                        batch_size = targets.shape[0] 
-                        hidden = model.init_hidden(batch_size=batch_size, static=static)
-                        outs = []
-                        thetas = []
-                        for step in range(context.size(-1)):
-                            context_step = context[:, :,step].unsqueeze(-2)
-                            features_step = features[:, :,step].unsqueeze(-2)
-                            
-                            out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
-                            outs.append(out)
-                            thetas.append(theta)
+                    batch_size = targets.shape[0] 
+                    hidden = model.init_hidden(batch_size=batch_size, static=static)
+                    outs = []
+                    thetas = []
+                    for step in range(context.size(-1)):
+                        context_step = context[:, :,step].unsqueeze(-2)
+                        features_step = features[:, :,step].unsqueeze(-2)
+                        
+                        out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+                        outs.append(out)
+                        thetas.append(theta)
 
-                        outs = torch.vstack(outs).T
-                        thetas = torch.stack(thetas)
-                        thetas = thetas.permute(1,0,2)
-                        loss = L1_bce(pred=outs, target=targets, theta=thetas, lamb=0.0, mask=mask)
-                        v_losses.append(loss.item())
+                    outs = torch.vstack(outs).T
+                    thetas = torch.stack(thetas)
+                    thetas = thetas.permute(1,0,2)
+                    loss = L1_bce(pred=outs, target=targets, theta=thetas, lamb=0.0, mask=mask)
+                    v_losses.append(loss.item())
 
-                    val_loss = np.mean(v_losses)
-                    val_losses.append(val_loss)     
+                val_loss = np.mean(v_losses)
+                val_losses.append(val_loss)     
 
-                    if val_loss < best_val:
-                        best_prev = best_val
-                        best_val = val_loss
-                        best_model = model
-                        if best_prev-best_val<1e-5:
-                            no_improvement += 1
-                        else: 
-                            no_improvement = 0
-                        print(best_val)
-                    
-                    else:
+                if val_loss < best_val:
+                    best_prev = best_val
+                    best_val = val_loss
+                    best_model = model
+                    if best_prev-best_val<1e-5:
                         no_improvement += 1
+                    else: 
+                        no_improvement = 0
+                    print(best_val)
+                
+                else:
+                    no_improvement += 1
+                optimizer.zero_grad()
                 
                 if no_improvement >= 10:
                     break
@@ -378,7 +381,8 @@ def train_vanilla(exp_name:str, train_loader:torch.utils.data.DataLoader, val_lo
         log_run(run_path = run_path, model=best_model, best_val=best_val, train_loss=train_losses, val_loss=val_losses)
 
 
-def load_run(run:str, dataset_name:str, bootstrap=None)-> torch.nn.Module:
+def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False)-> torch.nn.Module:
+    # Todo: remove add kwargs to logging, remove implicit_theta from kwargs here.    
     """Load a trained model
 
     Parameters
@@ -421,7 +425,7 @@ def load_run(run:str, dataset_name:str, bootstrap=None)-> torch.nn.Module:
         input_size = 1
 
     try:
-        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size)
+        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size, implicit_theta=implicit_theta)
         model.load_state_dict(torch.load(run_path / "model.pt"))
     except RuntimeError:
         model = VanillaRnn(input_size=input_size, hidden_dim=h, rnn_type=rnn_type)
