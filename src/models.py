@@ -25,7 +25,7 @@ class contextualized_sigmoid(nn.Module):
                 self.rnn = nn.LSTM(self.context_size, self.hidden_dim, self.n_layers, batch_first=True)
             else:
                 raise ValueError
-            self.fc = nn.Linear(self.hidden_dim, self.input_size)
+            self.fc = nn.Linear(self.hidden_dim, self.input_size*2)  # generate theta and beta
         else:
             if self.type == "RNN":
                 self.rnn = nn.RNN(self.context_size + self.input_size, self.hidden_dim, self.n_layers, batch_first=True)
@@ -33,11 +33,11 @@ class contextualized_sigmoid(nn.Module):
                 self.rnn = nn.LSTM(self.context_size + self.input_size, self.hidden_dim, self.n_layers, batch_first=True)
             else:
                 raise ValueError
-            self.fc = nn.Linear(self.hidden_dim, 1)
+            self.fc = nn.Linear(self.hidden_dim, 1)  # generate prob
+            self.offset = torch.zeros(size=(1,))
         self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.relu = nn.ReLU()
 
-    
     def init_hidden(self, batch_size, static=None):
         hidden = torch.zeros(self.n_layers, batch_size, self.hidden_dim)
         if self.type == "LSTM":
@@ -91,10 +91,10 @@ class contextualized_sigmoid(nn.Module):
             theta = self.relu(theta)
             theta = self.fc1(theta)
             theta = self.relu(theta)
-            theta = self.fc(theta)
-            return theta, hidden
+            theta_beta = self.fc(theta)
+            return theta_beta, hidden
 
-    def forward(self, context, observation, hidden=None):
+    def forward(self, context, observation, hidden=None, offset=None):
         batch_size = context.size(0)
         sig = nn.Sigmoid()
         if hidden is None:
@@ -112,27 +112,33 @@ class contextualized_sigmoid(nn.Module):
             prob = prob[:, 0, 0]  # Vectorize
             return prob, hidden, theta
         else:
-            theta, hidden = self.get_theta(context, observation, hidden)
+            theta_beta, hidden = self.get_theta(context, observation, hidden)
+            theta, beta = theta_beta[:, :self.input_size], theta_beta[:, self.input_size:]
 
             if self.input_size != 1:
                 logits_mat = observation.squeeze() @ theta.T
+                logits_mat_beta = observation.squeeze() @ beta.T
             
             else:
-                logits_mat =  (observation @ theta.T).squeeze()
+                logits_mat = (observation @ theta.T).squeeze()
+                logits_mat_beta = (observation @ theta.T).squeeze()
             
             if (logits_mat.ndim == 0):
                 logits = logits_mat.unsqueeze(0)
+                logits_beta = logits_mat_beta.unsqueeze(0)
             elif (logits_mat.ndim == 1):
                 logits = logits_mat
+                logits_beta = logits_mat_beta
             else:
-                #print(logits_mat)
                 logits = torch.diagonal(logits_mat)
-            prob = sig(logits)
-            
-            return prob, hidden, theta
+                logits_beta = torch.diagonal(logits_mat_beta)
+
+            prob = sig(logits+offset)
+            offset += logits_beta
+            return prob, hidden, theta, beta, offset
     
 
-def model_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndarray]:
+def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.ndarray, np.ndarray]:
     """Predict probability of taking an action for each sequence in a dataset usiing a CPR model.
 
     Parameters
@@ -158,13 +164,20 @@ def model_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndarra
         bs = targets.shape[0]
         outs = []
         hidden = model.init_hidden(bs, static)
-        seq_len = int(mask.sum().item()) 
+        seq_len = int(mask.sum().item())
+        batch_size = targets.shape[0]
+        offset = torch.zeros((batch_size,))
 
         for step in range(seq_len):
             context_step = context[:,:,step].unsqueeze(-2)
             features_step = features[:,:,step].unsqueeze(-2)
 
-            out, hidden, _ = model(context=context_step, observation=features_step, hidden=hidden)
+            if not implicit_theta:
+                out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
+                                                         hidden=hidden, offset=offset)
+            else:
+                out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+
             if step >= evaluate_from:
                 outs.append(out)
         
@@ -174,8 +187,8 @@ def model_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndarra
         preds.append(probs)
         target.append(targets)
 
-    pred_np = torch.concat(preds).detach().numpy().squeeze()
-    true_np = torch.concat(target).numpy()
+    pred_np = torch.cat(preds).detach().numpy().squeeze()
+    true_np = torch.cat(target).numpy()
 
     return pred_np, true_np
 
@@ -248,8 +261,10 @@ def vanilla_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndar
         outs = []
         hidden = model.init_hidden(bs)
         seq_len = int(mask.sum().item()) 
-        hidden = model.init_hidden(bs) 
-        outs = []
+        hidden = model.init_hidden(bs)
+        batch_size = targets.shape[0]
+        offset = torch.zeros((batch_size,))
+
         for step in range(seq_len):
             features_step = features[:,:,step].unsqueeze(-2)
             out, hidden = model(input=features_step, hidden=hidden)
@@ -267,7 +282,7 @@ def vanilla_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndar
     return pred_np, true_np
 
 
-def map_to_2d(model, loader_test, feature_cols, include_intercept=True, drop_first=False):
+def map_to_2d(model, loader_test, feature_cols, implicit_theta, include_intercept=True, drop_first=False):
     thetas = []
 
     cols = ["prob"]
@@ -280,7 +295,8 @@ def map_to_2d(model, loader_test, feature_cols, include_intercept=True, drop_fir
 
         seq_len = int(mask.sum().item())
         hidden = model.init_hidden(1, static=static)
-            
+        batch_size = targets.shape[0]
+        offset = torch.zeros((batch_size,))
 
         for step in range(seq_len):
             # with torch.no_grad():
@@ -288,7 +304,12 @@ def map_to_2d(model, loader_test, feature_cols, include_intercept=True, drop_fir
             features_step = features[:,:,step].unsqueeze(-2)
             #theta,_ = model.get_theta(context=context_step, hidden=hidden)
             # prob, hidden, theta = model(context=context_step, observation=features_step.unsqueeze(0), hidden=hidden)
-            prob, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+            if not implicit_theta:
+                prob, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
+                                                          hidden=hidden, offset=offset)
+            else:
+                prob, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+
             prob, theta = prob.detach(), theta.detach()
             thetas.append(theta.numpy())
             prob = prob.item()
