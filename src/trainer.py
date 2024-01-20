@@ -135,14 +135,15 @@ def L1_bce_global(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, be
         The loss.
     """
 
-    zer = torch.zeros_like(theta)
+    zer_theta = torch.zeros_like(theta)
+    zer_beta = torch.zeros_like(beta)
     reg = nn.L1Loss(reduction="none")
     loss_fct = nn.BCELoss(reduction="none")
 
     mask_l1 = mask.unsqueeze(-1).expand(theta.size())
 
-    reg_theta = lamb * reg(theta, zer) * mask_l1
-    reg_beta = lamb * reg(beta, zer) * mask_l1
+    reg_theta = lamb * reg(theta, zer_theta) * mask_l1
+    reg_beta = lamb * reg(beta, zer_beta) * mask_l1
     bce = loss_fct(pred, target) * mask
 
     loss = bce.sum()/mask.sum() + (reg_theta.sum()+reg_beta.sum()) / mask.sum()
@@ -226,10 +227,11 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                     for step in range(context.size(-1)):
                         context_step = context[:, :,step].unsqueeze(-2)
                         features_step = features[:, :,step].unsqueeze(-2)
+                        target_step = targets[:, step:step+1].unsqueeze(-2)
 
                         if not implicit_theta:
                             out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                                     hidden=hidden, offset=offset)
+                                                                     target=target_step, hidden=hidden, offset=offset)
                             betas.append(beta[:, :-1])
                         else:
                             out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
@@ -267,11 +269,12 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                     for step in range(context.size(-1)):
                         context_step = context[:, :,step].unsqueeze(-2)
                         features_step = features[:, :,step].unsqueeze(-2)
+                        target_step = targets[:, step:step + 1].unsqueeze(-2)
                         
                         if not implicit_theta:
                             out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                                     hidden=hidden, offset=offset)
-                            betas.append(beta[:, :-1])
+                                                                     target=target_step, hidden=hidden, offset=offset)
+                            betas.append(beta)
                         else:
                             out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
                         outs.append(out)

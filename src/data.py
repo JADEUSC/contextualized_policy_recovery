@@ -31,8 +31,8 @@ class Context_df_dataset(Dataset):
         self.df = df
         self.patients = self.df[identifier_col].unique()
         self.context_cols = feature_cols 
-        self.context_cols = self.context_cols + [target_col]
-        self.feature_cols = feature_cols
+        self.context_cols = self.context_cols + [target_col]  # "x" + "theta"
+        self.feature_cols = feature_cols  # "x"
         self.target_col = target_col
         self.identifier_col = identifier_col
         self.max_length = max_length
@@ -90,7 +90,7 @@ class Context_df_dataset(Dataset):
         torch.Tensor
             x_t with an intercept
         """
-        interc = torch.ones((data.shape[0],1))
+        interc = torch.ones((data.shape[0], 1))
         data_interc = torch.cat((data, interc), 1)
 
         return data_interc
@@ -109,7 +109,7 @@ class Context_df_dataset(Dataset):
 
         context = Context_df_dataset.add_dummy_row(context)
         # Context contains values up to t-1, so remove the last row
-        context = context[:-1,:]
+        context = context[:-1, :]
 
         if self.add_intercept_yn:
             features_interc = Context_df_dataset.add_intercept(features)
@@ -125,7 +125,7 @@ class Context_df_dataset(Dataset):
             static = data[self.static_cols].iloc[0].values
             static = torch.tensor(static, dtype=torch.float)
 
-        return (nn.pad(context.T, (0,self.max_length-seq_length)), 
+        return (nn.pad(context.T, (0, self.max_length-seq_length)),
                 nn.pad(features_interc.T, (0, self.max_length-seq_length)), 
                 nn.pad(target, (0, self.max_length - seq_length)), 
                 patient,
@@ -168,4 +168,3 @@ class Vanilla_df_dataset(Dataset):
                 patient,
                 mask
         )
-    

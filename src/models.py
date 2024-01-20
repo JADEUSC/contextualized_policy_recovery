@@ -25,7 +25,7 @@ class contextualized_sigmoid(nn.Module):
                 self.rnn = nn.LSTM(self.context_size, self.hidden_dim, self.n_layers, batch_first=True)
             else:
                 raise ValueError
-            self.fc = nn.Linear(self.hidden_dim, self.input_size*2)  # generate theta and beta
+            self.fc = nn.Linear(self.hidden_dim, self.input_size+1)  # generate theta and beta
         else:
             if self.type == "RNN":
                 self.rnn = nn.RNN(self.context_size + self.input_size, self.hidden_dim, self.n_layers, batch_first=True)
@@ -94,7 +94,7 @@ class contextualized_sigmoid(nn.Module):
             theta_beta = self.fc(theta)
             return theta_beta, hidden
 
-    def forward(self, context, observation, hidden=None, offset=None):
+    def forward(self, context, observation, target=None, hidden=None, offset=None):
         batch_size = context.size(0)
         sig = nn.Sigmoid()
         if hidden is None:
@@ -113,11 +113,13 @@ class contextualized_sigmoid(nn.Module):
             return prob, hidden, theta
         else:
             theta_beta, hidden = self.get_theta(context, observation, hidden)
-            theta, beta = theta_beta[:, :self.input_size], theta_beta[:, self.input_size:]
+            theta, beta = theta_beta[:, :-2], theta_beta[:, -2:]
+            observation, intercept = observation[:,:,:-1], observation[:,:,-1:]
+            action_obs = torch.cat([observation, target], dim=-1)
 
             if self.input_size != 1:
-                logits_mat = observation.squeeze() @ theta.T
-                logits_mat_beta = observation.squeeze() @ beta.T
+                logits_mat = observation.squeeze(1) @ theta.T
+                logits_mat_beta = action_obs.squeeze(1) @ beta.T
             
             else:
                 logits_mat = (observation @ theta.T).squeeze()
@@ -171,10 +173,11 @@ def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.nd
         for step in range(seq_len):
             context_step = context[:,:,step].unsqueeze(-2)
             features_step = features[:,:,step].unsqueeze(-2)
+            target_step = targets[:, step:step + 1].unsqueeze(-2)
 
             if not implicit_theta:
                 out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                         hidden=hidden, offset=offset)
+                                                         target=target_step, hidden=hidden, offset=offset)
             else:
                 out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
 
@@ -286,7 +289,8 @@ def map_to_2d(model, loader_test, feature_cols, implicit_theta, include_intercep
     thetas = []
 
     cols = ["prob"]
-    if include_intercept:
+
+    if include_intercept and implicit_theta:
         cols = ["intercept"] + cols
 
     df = pd.DataFrame(columns=["id", "t"] + feature_cols + cols) 
@@ -302,19 +306,24 @@ def map_to_2d(model, loader_test, feature_cols, implicit_theta, include_intercep
             # with torch.no_grad():
             context_step = context[:,:,step].unsqueeze(-2)
             features_step = features[:,:,step].unsqueeze(-2)
-            #theta,_ = model.get_theta(context=context_step, hidden=hidden)
+            target_step = targets[:, step:step + 1].unsqueeze(-2)
+            # theta,_ = model.get_theta(context=context_step, hidden=hidden)
             # prob, hidden, theta = model(context=context_step, observation=features_step.unsqueeze(0), hidden=hidden)
             if not implicit_theta:
                 prob, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                          hidden=hidden, offset=offset)
+                                                          target=target_step, hidden=hidden, offset=offset)
             else:
                 prob, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
 
             prob, theta = prob.detach(), theta.detach()
             thetas.append(theta.numpy())
             prob = prob.item()
+
             try:
-                df.loc[len(df.index)] = [int(pid[0]), step] + theta.numpy().squeeze().tolist() + [prob]
+                if implicit_theta:
+                    df.loc[len(df.index)] = [int(pid[0]), step] + theta.numpy().squeeze().tolist() + [prob]
+                else:
+                    df.loc[len(df.index)] = [int(pid[0]), step] + [theta.numpy().squeeze().tolist()] + [prob]
             except TypeError:
                 df.loc[len(df.index)] = [int(pid[0]), step] + [theta.numpy().squeeze()] + [prob]
     
@@ -323,7 +332,7 @@ def map_to_2d(model, loader_test, feature_cols, implicit_theta, include_intercep
         df_coef = df_coef[df_coef["t"] != 0]
 
     reducer = umap.UMAP(random_state=42, n_neighbors=50, n_components=2)
-    if include_intercept:
+    if include_intercept and implicit_theta:
         embedding = reducer.fit_transform(df_coef[feature_cols + ["intercept"]].values)
     else:
         embedding = reducer.fit_transform(df_coef[feature_cols].values)
