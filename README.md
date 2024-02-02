@@ -1,6 +1,6 @@
 # Contextualized Policy Recovery
 
-This repository contains the code for replicating the results presented in the masters thesis *Contextualized Policy Recovery*.
+This repository contains the code for replicating *Contextualized Policy Recovery*.
 
 ## Installation
 
