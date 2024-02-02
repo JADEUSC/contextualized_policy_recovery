@@ -193,7 +193,7 @@ def get_bootstrap_loader_context(dataset:str, run:int, feature_cols:List[str], t
         Test set dataloader
     """
     if run is None:
-        train, val , test = load_split(dataset=dataset)
+        train, val, test = load_split(dataset=dataset)
     else:
         train, val, test = load_bootstrap_run(dataset=dataset, run=run)
 
@@ -218,7 +218,7 @@ def get_bootstrap_loader_context(dataset:str, run:int, feature_cols:List[str], t
     
     loader_train = DataLoader(ds_train, shuffle=True, batch_size=64)
     loader_val = DataLoader(ds_val, shuffle=True, batch_size=64)
-    loader_test = DataLoader(ds_test, shuffle=False, batch_size=1)
+    loader_test = DataLoader(ds_test, shuffle=False, batch_size=1)  # 1
 
     return loader_train, loader_val, loader_test
 
@@ -316,6 +316,8 @@ def train_bootstrap(exp_name:str, dataset_name:str, run:int, feature_cols:List[s
 
     if dataset_name.lower() == "adni":
         standardize = False
+    else:
+        standardize = True
 
     print(standardize)
 
@@ -363,6 +365,8 @@ def train_bootstrap_vanilla(exp_name:str, dataset:str, run:int, feature_cols:Lis
 
     if dataset.lower() == "adni":
         standardize = False
+    else:
+        standardize = True
     
     loader_train, loader_val, _ = get_bootstrap_loader_vanilla(dataset=dataset, run=run, 
                                                                         feature_cols=feature_cols,
@@ -427,7 +431,7 @@ def get_best_model(experiment_name:str, pref:str, n_bootstrap=10) -> str:
     return min(results, key=results.get)
 
 
-def get_test_results(dataset:str, exp_name:str, model_name:str):
+def visualize_results(dataset:str, exp_name:str, model_name:str, implicit_theta:bool):
     """_summary_
 
     Parameters
@@ -443,6 +447,63 @@ def get_test_results(dataset:str, exp_name:str, model_name:str):
 
     if dataset.lower() == "adni":
         standardize = False
+    else:
+        standardize = True
+
+    aurocs, auprcs, briers, f1s = [], [], [], []
+    for boostrap_run in range(10):
+
+        model = load_model(model_name=model_name, experiment_name=exp_name, bootstrap=boostrap_run)
+        run_params = TRAINING_PARAMS[dataset.lower()]
+
+        if not "baseline" in model_name:
+            _,_, loader_test = get_bootstrap_loader_context(dataset=dataset, run=boostrap_run,
+                                                            feature_cols=run_params["feature_cols"],
+                                                            time_col=run_params["time_col"],
+                                                            target_col=run_params["target_col"],
+                                                            identifier_col=run_params["identifier_col"],
+                                                            standardize=standardize)
+
+            pred_context, true_context = models.model_predict(model, loader_test, implicit_theta)
+        else:
+            _,_, loader_test = get_bootstrap_loader_vanilla(dataset=dataset, run=boostrap_run,
+                                                            feature_cols=run_params["feature_cols"],
+                                                            time_col=run_params["time_col"],
+                                                            target_col=run_params["target_col"],
+                                                            identifier_col=run_params["identifier_col"],
+                                                            action_col=run_params["action_col"],
+                                                            standardize=standardize)
+
+            pred_context, true_context = models.vanilla_predict(model, loader_test)
+
+        auroc, auprc, brier, f1 = trainer.calculate_results(pred = pred_context, true=true_context)
+        aurocs.append(auroc)
+        auprcs.append(auprc)
+        briers.append(brier)
+        f1s.append(f1)
+
+    final_str = util.format_results(model_name=model_name, dataset=dataset, auprcs=auprcs, aurocs=aurocs, briers=briers, f1s=f1s)
+    return final_str
+
+
+def get_test_results(dataset:str, exp_name:str, model_name:str, implicit_theta:bool):
+    """_summary_
+
+    Parameters
+    ----------
+    dataset : str
+        _description_
+    exp_name : str
+        _description_
+    model_name : str
+        _description_
+    """
+    p = get_run_path(exp_name) / model_name
+
+    if dataset.lower() == "adni":
+        standardize = False
+    else:
+        standardize = True
 
     aurocs, auprcs, briers, f1s = [], [], [], []
     for boostrap_run in range(10):
@@ -458,7 +519,8 @@ def get_test_results(dataset:str, exp_name:str, model_name:str):
                                                             identifier_col=run_params["identifier_col"],
                                                             standardize=standardize)
 
-            pred_context, true_context = models.model_predict(model, loader_test)
+            pred_context, true_context = models.model_predict_plot(model, loader_test, implicit_theta)
+            # change this in order to plot coefficients. can change back.
         else:
             _,_, loader_test = get_bootstrap_loader_vanilla(dataset=dataset, run=boostrap_run, 
                                                             feature_cols=run_params["feature_cols"], 

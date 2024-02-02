@@ -141,9 +141,10 @@ def L1_bce_global(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, be
     loss_fct = nn.BCELoss(reduction="none")
 
     mask_l1 = mask.unsqueeze(-1).expand(theta.size())
+    mask_l1_beta = mask.unsqueeze(-1).expand(beta.size())
 
     reg_theta = lamb * reg(theta, zer_theta) * mask_l1
-    reg_beta = lamb * reg(beta, zer_beta) * mask_l1
+    reg_beta = lamb * reg(beta, zer_beta) * mask_l1_beta
     bce = loss_fct(pred, target) * mask
 
     loss = bce.sum()/mask.sum() + (reg_theta.sum()+reg_beta.sum()) / mask.sum()
@@ -153,7 +154,7 @@ def L1_bce_global(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, be
 
 def train_contextual(exp_name:str, input_size:int, context_size:int, train_loader:torch.utils.data.DataLoader, 
                      val_loader:torch.utils.data.DataLoader, lr:float=5e-4, rnn_type:str="LSTM", 
-                     hidden_dims:List[int]=[16, 32, 64], lambdas:List[int]=[0.0001, 0.001, 0.01, 0.1], 
+                     hidden_dims:List[int]=[16, 32, 64], lambdas:List[float]=[0.0001, 0.001, 0.01, 0.1],
                      bootstrap:Optional[int]=None, implicit_theta=False):
     """Train a contextualized model.
 
@@ -232,11 +233,11 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                         if not implicit_theta:
                             out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
                                                                      target=target_step, hidden=hidden, offset=offset)
-                            betas.append(beta[:, :-1])
+                            betas.append(beta)
                         else:
                             out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
                         # we dont regularize the intercept
-                        thetas.append(theta[:,:-1])
+                        thetas.append(theta)
                         outs.append(out)
     
                     probs = torch.vstack(outs).T

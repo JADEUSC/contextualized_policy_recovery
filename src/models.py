@@ -3,6 +3,7 @@ import torch
 
 from typing import Tuple
 import numpy as np
+alpha = 0.8
 
 import pandas as pd
 
@@ -15,6 +16,7 @@ class contextualized_sigmoid(nn.Module):
         self.n_layers = n_layers
         self.context_size = context_size
         self.input_size = input_size
+        self.feature_size = input_size - 1
         self.type = type
         self.implicit_theta = implicit_theta
 
@@ -25,7 +27,7 @@ class contextualized_sigmoid(nn.Module):
                 self.rnn = nn.LSTM(self.context_size, self.hidden_dim, self.n_layers, batch_first=True)
             else:
                 raise ValueError
-            self.fc = nn.Linear(self.hidden_dim, self.input_size+1)  # generate theta and beta
+            self.fc = nn.Linear(self.hidden_dim, self.feature_size*2+1)  # generate theta and beta
         else:
             if self.type == "RNN":
                 self.rnn = nn.RNN(self.context_size + self.input_size, self.hidden_dim, self.n_layers, batch_first=True)
@@ -112,15 +114,14 @@ class contextualized_sigmoid(nn.Module):
             prob = prob[:, 0, 0]  # Vectorize
             return prob, hidden, theta
         else:
+            observation, intercept = observation[:, :, :-1], observation[:, :, -1:]
             theta_beta, hidden = self.get_theta(context, observation, hidden)
-            theta, beta = theta_beta[:, :-2], theta_beta[:, -2:]
-            observation, intercept = observation[:,:,:-1], observation[:,:,-1:]
+            theta, beta = theta_beta[:, :self.feature_size], theta_beta[:, self.feature_size:]
             action_obs = torch.cat([observation, target], dim=-1)
 
-            if self.input_size != 1:
+            if self.feature_size != 1:
                 logits_mat = observation.squeeze(1) @ theta.T
                 logits_mat_beta = action_obs.squeeze(1) @ beta.T
-            
             else:
                 logits_mat = (observation @ theta.T).squeeze()
                 logits_mat_beta = (observation @ theta.T).squeeze()
@@ -136,9 +137,9 @@ class contextualized_sigmoid(nn.Module):
                 logits_beta = torch.diagonal(logits_mat_beta)
 
             prob = sig(logits+offset)
-            offset += logits_beta
+            offset = offset*(1-alpha) + alpha*logits_beta
             return prob, hidden, theta, beta, offset
-    
+
 
 def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.ndarray, np.ndarray]:
     """Predict probability of taking an action for each sequence in a dataset usiing a CPR model.
@@ -159,6 +160,7 @@ def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.nd
     np.ndarray
         The true labels
     """
+
     preds = []
     target = []
 
@@ -177,14 +179,14 @@ def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.nd
 
             if not implicit_theta:
                 out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                         target=target_step, hidden=hidden, offset=offset)
+                                                                target=target_step, hidden=hidden, offset=offset)
             else:
                 out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
 
             if step >= evaluate_from:
                 outs.append(out)
-        
-        targets = targets.T[evaluate_from:seq_len,:]
+
+        targets = targets.T[evaluate_from:seq_len, :]
         probs = torch.vstack(outs)
 
         preds.append(probs)
@@ -194,6 +196,119 @@ def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.nd
     true_np = torch.cat(target).numpy()
 
     return pred_np, true_np
+
+
+def model_predict_plot(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.ndarray, np.ndarray]:
+    """Predict probability of taking an action for each sequence in a dataset usiing a CPR model.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The CPR model
+    loader : torch.utils.data.DataLoader
+        The dataset to predict on
+    evaluate_from : int, optional
+        Timestep to start evaluating from, by default 0
+
+    Returns
+    -------
+    np.ndarray
+        The predicted probabilities
+    np.ndarray
+        The true labels
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    beta_pop, theta_pop = [], []
+
+    for context, features, targets, _, mask, static in loader:
+        bs = targets.shape[0]
+        outs, thetas, betas = [], [], []
+        hidden = model.init_hidden(bs, static)
+        seq_len = int(mask.sum().item())
+        batch_size = targets.shape[0]
+        offset = torch.zeros((batch_size,))
+
+        for step in range(seq_len):
+            context_step = context[:,:,step].unsqueeze(-2)
+            features_step = features[:,:,step].unsqueeze(-2)
+            target_step = targets[:, step:step + 1].unsqueeze(-2)
+
+            if not implicit_theta:
+                out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
+                                                                target=target_step, hidden=hidden, offset=offset)
+            else:
+                out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+
+            if step >= evaluate_from:
+                if not implicit_theta:
+                    thetas.append(theta.flatten().detach().numpy())
+                    betas.append(beta.flatten().detach().numpy())
+
+        for i in range(seq_len-1):
+            betas[i] = betas[i] * 0.8 * 0.2**(seq_len-i-2)  # seq_len should be >2 safely
+        betas = betas[:-1]  # since the last beta does not participate in calculation at all
+
+        beta_pop.append(np.array(betas))
+        theta_pop.append(thetas[-1])
+
+    # Function to calculate mean and std dev for each time step
+    def calculate_coef_stats(arrays):
+        max_length = max(len(arr) for arr in arrays)
+        means = []
+        std_devs = []
+
+        for i in range(max_length):
+            values = np.array([arr[i] for arr in arrays if i < len(arr)])
+            means.append(np.mean(values, axis=0))
+            std_devs.append(np.std(values, axis=0))
+
+        return np.array(means), np.array(std_devs)
+
+    # Determine the maximum length of the arrays
+    max_length = max(len(arr) for arr in beta_pop) + 1
+
+    # Time steps
+    time_steps = np.arange(max_length)
+    print(time_steps)
+
+    # Coefficients
+    means, std_devs = calculate_coef_stats(beta_pop)  # (max_length - 1, dimensionality of <features&action>)
+    mean_theta, std_theta = calculate_coef_stats(theta_pop)
+    mean_theta = np.append(mean_theta, 0)
+    std_theta = np.append(std_theta, 0)
+    means = np.vstack((means, mean_theta))
+    std_devs = np.vstack((std_devs, std_theta))
+    times = ['1', '2', '3', '4', '5']
+    col = ['Potassium', 'WBC', 'Temperature', 'Hematocrit', 'Mean BP', 'High Heart Rate',
+           'Creatinine', 'Treatment']
+
+    for i in range(len(means[0])):
+        # Ensure the figure is large enough
+        plt.figure(figsize=(6, 6))
+
+        salmon_color = '#FFA07A'
+
+        # Create a time series plot with the shaded standard deviation
+        sns.lineplot(x=time_steps, y=means[:, i], color='red')
+        plt.fill_between(time_steps, np.array(means[:, i]) - np.array(std_devs[:, i]),
+                         np.array(means[:, i]) + np.array(std_devs[:, i]), color=salmon_color, alpha=0.15)
+
+        # Setting the plot title and labels
+        plt.xlabel('Time Step')
+        plt.ylabel('Value')
+        plt.title('Coefficient of {}'.format(col[i]))
+
+        # Set x-axis to show integers only
+        from matplotlib.ticker import MaxNLocator
+        plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+
+        # Show the plot with larger font size
+        plt.tight_layout()
+        plt.savefig('Global_coefficient_{}.pdf'.format(col[i]))
+        # plt.show()
+        plt.close()
 
 
 class VanillaRnn(nn.Module):
@@ -279,8 +394,8 @@ def vanilla_predict(model, loader, evaluate_from=0) -> Tuple[np.ndarray, np.ndar
         probs = torch.vstack(outs)
         preds.append(probs)
 
-    pred_np = torch.concat(preds).detach().numpy().squeeze()
-    true_np = torch.concat(target).numpy()
+    pred_np = torch.cat(preds).detach().numpy().squeeze()
+    true_np = torch.cat(target).numpy()
 
     return pred_np, true_np
 

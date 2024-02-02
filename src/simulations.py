@@ -6,6 +6,7 @@ from src import preprocess, data
 
 from torch.utils.data import DataLoader
 
+
 def sequence(n:int=25, p:float=0, lower_bound:int=-1, upper_bound:int=1):
     x = []
     x.append(random.uniform(lower_bound, upper_bound))
