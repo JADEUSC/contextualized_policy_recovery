@@ -3,11 +3,13 @@ import torch
 
 from typing import Tuple
 import numpy as np
-alpha = 0.8
 
 import pandas as pd
 
 import umap
+
+alpha = 0.8  # must be >0. The local:global ratio in calculation. 1 means using only local information for policy recovery.
+
 
 class contextualized_sigmoid(nn.Module):
     def __init__(self, hidden_dim=16, n_layers=1, context_size=6, input_size=6, type="RNN", implicit_theta=False):
