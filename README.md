@@ -16,7 +16,7 @@ All other experiments to create the relevant figures can be found in `notebooks/
 
 The code to run the bootstrap runs can be found in `src/ADNI_bootstrap.py` and `src/MIMIC_bootstrap.py` and is used to create `ADNI_results.txt` and `MIMIC_results.txt`. 
 
-The code to run the simulations can be found in 'notebooks/simulation_mdp.py' and the code to plot the figure is 'notebooks/plot.py'. Choose alpha=1 for using local information only and 1>alpha>0 for using global information.
+The code to run the simulations can be found in `notebooks/simulation_mdp.py` and the code to plot the figure is `notebooks/plot.py`. Choose `alpha=1` for using local information only and `1>alpha>0` for using global information.
 
 ## Data 
 1) ADNI: After getting Data access from the [Alzheimer's Disease Neuroimaging Initiative (ADNI)](https://adni.loni.usc.edu/), place the `ADNIMERGE.csv` file in the `data/adni/raw/` folder.
