@@ -8,11 +8,9 @@ import pandas as pd
 
 import umap
 
-alpha = 0.8  # must be >0. The local:global ratio in calculation. 1 means using only local information for policy recovery.
-
-
 class contextualized_sigmoid(nn.Module):
-    def __init__(self, hidden_dim=16, n_layers=1, context_size=6, input_size=6, type="RNN", implicit_theta=False):
+    def __init__(self, hidden_dim=16, n_layers=1, context_size=6, input_size=6, type="RNN", implicit_theta=False,
+                 alpha=0.8):
         super(contextualized_sigmoid, self).__init__()
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
@@ -21,6 +19,7 @@ class contextualized_sigmoid(nn.Module):
         self.feature_size = input_size - 1
         self.type = type
         self.implicit_theta = implicit_theta
+        self.alpha = alpha
 
         if not self.implicit_theta:
             if self.type == "RNN":
@@ -139,7 +138,7 @@ class contextualized_sigmoid(nn.Module):
                 logits_beta = torch.diagonal(logits_mat_beta)
 
             prob = sig(logits+offset)
-            offset = offset*(1-alpha) + alpha*logits_beta
+            offset = offset*(1-self.alpha) + self.alpha*logits_beta
             return prob, hidden, theta, beta, offset
 
 
@@ -181,7 +180,7 @@ def model_predict(model, loader, implicit_theta, evaluate_from=0) -> Tuple[np.nd
 
             if not implicit_theta:
                 out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
-                                                                target=target_step, hidden=hidden, offset=offset)
+                                                         target=target_step, hidden=hidden, offset=offset)
             else:
                 out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
 
@@ -262,7 +261,7 @@ def model_predict_plot(model, loader, implicit_theta, evaluate_from=0) -> Tuple[
         std_devs = []
 
         for i in range(max_length):
-            values = np.array([arr[i] for arr in arrays if i < len(arr)])
+            values = np.array([abs(arr[i]) for arr in arrays if i < len(arr)])
             means.append(np.mean(values, axis=0))
             std_devs.append(np.std(values, axis=0))
 
@@ -292,10 +291,17 @@ def model_predict_plot(model, loader, implicit_theta, evaluate_from=0) -> Tuple[
 
         salmon_color = '#FFA07A'
 
-        # Create a time series plot with the shaded standard deviation
-        sns.lineplot(x=time_steps, y=means[:, i], color='red')
-        plt.fill_between(time_steps, np.array(means[:, i]) - np.array(std_devs[:, i]),
-                         np.array(means[:, i]) + np.array(std_devs[:, i]), color=salmon_color, alpha=0.15)
+        if i != len(means[0]) - 1:
+            # Create a time series plot with the shaded standard deviation
+            sns.lineplot(x=time_steps, y=means[:, i], color='red')
+            plt.fill_between(time_steps, np.array(means[:, i]) - np.array(std_devs[:, i]),
+                             np.array(means[:, i]) + np.array(std_devs[:, i]), color=salmon_color, alpha=0.15)
+
+        else:
+            # Create a time series plot with the shaded standard deviation
+            sns.lineplot(x=time_steps[:-1], y=means[:, i][:-1], color='red')
+            plt.fill_between(time_steps[:-1], np.array(means[:, i][:-1]) - np.array(std_devs[:, i][:-1]),
+                             np.array(means[:, i][:-1]) + np.array(std_devs[:, i][:-1]), color=salmon_color, alpha=0.15)
 
         # Setting the plot title and labels
         plt.xlabel('Time Step')

@@ -283,7 +283,7 @@ def get_bootstrap_loader_vanilla(dataset:pd.DataFrame, run:int, feature_cols:Lis
 
 def train_bootstrap(exp_name:str, dataset_name:str, run:int, feature_cols:List[str], time_col:str, target_col:str, 
                     identifier_col:str, input_size:int, context_size:int, hidden_dims:List[int], lambdas:List[float], 
-                    rnn_type:str):
+                    alpha:float, rnn_type:str):
     """Train a CPR model for every hidden_dim x lambda combination on a bootstrap sample run.
 
     Parameters
@@ -330,7 +330,7 @@ def train_bootstrap(exp_name:str, dataset_name:str, run:int, feature_cols:List[s
     
     trainer.train_contextual(exp_name=exp_name, input_size=input_size, context_size=context_size, 
                              train_loader=loader_train, val_loader=loader_val, hidden_dims=hidden_dims, 
-                             lambdas=lambdas, lr=5e-4, bootstrap=run, rnn_type=rnn_type)
+                             lambdas=lambdas, alpha=alpha, lr=5e-4, bootstrap=run, rnn_type=rnn_type)
     
 
 def train_bootstrap_vanilla(exp_name:str, dataset:str, run:int, feature_cols:List[str], time_col:str, target_col:str, 

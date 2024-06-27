@@ -155,7 +155,7 @@ def L1_bce_global(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, be
 def train_contextual(exp_name:str, input_size:int, context_size:int, train_loader:torch.utils.data.DataLoader, 
                      val_loader:torch.utils.data.DataLoader, lr:float=5e-4, rnn_type:str="LSTM", 
                      hidden_dims:List[int]=[16, 32, 64], lambdas:List[float]=[0.0001, 0.001, 0.01, 0.1],
-                     bootstrap:Optional[int]=None, implicit_theta=False):
+                     alpha:float=0.8, bootstrap:Optional[int]=None, implicit_theta=False):
     """Train a contextualized model.
 
     Parameters
@@ -178,6 +178,8 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
         List of hidden states used for GridSearch. Defaults to [16, 32, 64].
     lambdas : List[int], optional
         List of regularization values lambdas. Defaults to [0, 0.001, 0.01, 0.1].
+    alpha: float, optional
+        Choose the ratio for using local:global information in policy recovery. 1 means using only local information.
     bootstrap : int, optional
         Number of bootstrap run. Defaults to None.
     implicit_theta: bool, optional
@@ -196,7 +198,7 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
             #     continue
             
             model = contextualized_sigmoid(hidden_dim=hidden_dim, type=rnn_type, input_size=input_size, 
-                                           context_size=context_size, implicit_theta=implicit_theta)
+                                           context_size=context_size, implicit_theta=implicit_theta, alpha=alpha)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
             best_prev = 1000
@@ -452,7 +454,7 @@ def train_vanilla(exp_name:str, train_loader:torch.utils.data.DataLoader, val_lo
         log_run(run_path = run_path, model=best_model, best_val=best_val, train_loss=train_losses, val_loss=val_losses)
 
 
-def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False)-> torch.nn.Module:
+def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False, alpha=0.8)-> torch.nn.Module:
     # Todo: remove add kwargs to logging, remove implicit_theta from kwargs here.    
     """Load a trained model
 
@@ -496,7 +498,8 @@ def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False)-> 
         input_size = 1
 
     try:
-        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size, implicit_theta=implicit_theta)
+        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size,
+                                       implicit_theta=implicit_theta, alpha=alpha)
         model.load_state_dict(torch.load(run_path / "model.pt"))
     except RuntimeError:
         model = VanillaRnn(input_size=input_size, hidden_dim=h, rnn_type=rnn_type)
