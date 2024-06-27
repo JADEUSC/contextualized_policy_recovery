@@ -59,9 +59,6 @@ for scan in default_vals.keys():
     plot_df['pcc_theta'] = pd.to_numeric(plot_df['pcc_theta'], errors='coerce')
     plot_df['pcc_prob'] = pd.to_numeric(plot_df['pcc_prob'], errors='coerce')
 
-    import pdb
-    pdb.set_trace()
-
     # Plot pcc Theta
     sns.catplot(
         x=scan,
