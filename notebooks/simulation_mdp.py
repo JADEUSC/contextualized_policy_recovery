@@ -93,7 +93,7 @@ def gen_data(time_lag, noise, N, seq_length, cn):
     return sim_df
 
 
-def run_model(exp_name, sim_df, seq_length, implicit_theta, hidden_dims=[16], lambdas=[0]):
+def run_model(exp_name, sim_df, seq_length, implicit_theta, alpha=0.8, hidden_dims=[16], lambdas=[0]):
     feature_cols = ["x"]
     loader_train, loader_val, loader_test = simulations.create_simulation_loader(sim_df, seq_length=seq_length)  # Changed to sim
 
@@ -102,11 +102,13 @@ def run_model(exp_name, sim_df, seq_length, implicit_theta, hidden_dims=[16], la
     # Previous action + observation size + 1
     context_size = 3
 
-    trainer.train_contextual(exp_name=exp_name, input_size=input_size, context_size=context_size, train_loader=loader_train, 
-                            val_loader=loader_val, hidden_dims=hidden_dims, lambdas=lambdas, lr=5e-2, implicit_theta=implicit_theta)
+    trainer.train_contextual(exp_name=exp_name, input_size=input_size, context_size=context_size,
+                             train_loader=loader_train, val_loader=loader_val, hidden_dims=hidden_dims,
+                             lambdas=lambdas, alpha=alpha, lr=5e-2, implicit_theta=implicit_theta)
 
     best_context_l = trainer.get_best_run(exp=exp_name, pref="context_LSTM")
-    best_context_l_model = trainer.load_run(run=best_context_l, dataset_name=exp_name, implicit_theta=implicit_theta)
+    best_context_l_model = trainer.load_run(run=best_context_l, dataset_name=exp_name, implicit_theta=implicit_theta,
+                                            alpha=alpha)
     pred_context, true_context = models.model_predict(best_context_l_model, loader_test, implicit_theta)
     auroc, auprc, brier, f1 = trainer.calculate_results(pred=pred_context, true=true_context)
 
