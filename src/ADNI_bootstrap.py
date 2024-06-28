@@ -19,42 +19,46 @@ standardize = False
 
 if __name__ == "__main__":
 
-    # Load data
-    df = process_adni()
-    df = encode_adni(df)
-
-    bootstrap.create_bootstap_splits(df=df, dataset_name=dataset, n_bootstrap=10, split_col=identifier_col)
-
-    # Train contextual model
-    for rnn_type in ["RNN", "LSTM"]:
-        print(f"RNN type: {rnn_type}")
-        for run in range(10):
-            print(f"Run {run}")
-            bootstrap.train_bootstrap(exp_name=exp_name, dataset_name=dataset, run=run, feature_cols=feature_cols, 
-                                    time_col=time_col, target_col=target_col, identifier_col=identifier_col, 
-                                    input_size=input_size, rnn_type=rnn_type, context_size=context_size, 
-                                    hidden_dims=hidden_dims, lambdas=lambdas)
-
-    # Train baseline model
-    for rnn_type in ["RNN", "LSTM"]:
-        for run in range(10):
-            print(f"Run {run}")
-            bootstrap.train_bootstrap_vanilla(exp_name=exp_name, dataset=dataset, run=run, feature_cols=feature_cols, 
-                                            time_col=time_col, target_col=target_col, identifier_col=identifier_col, 
-                                            input_size=6, rnn_type=rnn_type,hidden_dims=hidden_dims, action_col="a")
+    # # Load data
+    # df = process_adni()
+    # df = encode_adni(df)
+    #
+    # bootstrap.create_bootstap_splits(df=df, dataset_name=dataset, n_bootstrap=10, split_col=identifier_col)
+    #
+    # # Train contextual model
+    # for rnn_type in ["RNN", "LSTM"]:
+    #     print(f"RNN type: {rnn_type}")
+    #     for run in range(10):
+    #         print(f"Run {run}")
+    #         bootstrap.train_bootstrap(exp_name=exp_name, dataset_name=dataset, run=run, feature_cols=feature_cols,
+    #                                 time_col=time_col, target_col=target_col, identifier_col=identifier_col,
+    #                                 input_size=input_size, rnn_type=rnn_type, context_size=context_size,
+    #                                 hidden_dims=hidden_dims, lambdas=lambdas)
+    #
+    # # Train baseline model
+    # for rnn_type in ["RNN", "LSTM"]:
+    #     for run in range(10):
+    #         print(f"Run {run}")
+    #         bootstrap.train_bootstrap_vanilla(exp_name=exp_name, dataset=dataset, run=run, feature_cols=feature_cols,
+    #                                         time_col=time_col, target_col=target_col, identifier_col=identifier_col,
+    #                                         input_size=6, rnn_type=rnn_type,hidden_dims=hidden_dims, action_col="a")
 
 
     best_context_rnn = bootstrap.get_best_model(experiment_name=exp_name, pref="context_RNN")
-    results_c_rnn = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_context_rnn)
+    results_c_rnn = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_context_rnn,
+                                               implicit_theta=False)
 
     best_context_lstm = bootstrap.get_best_model(experiment_name=exp_name, pref="context_LSTM")
-    results_c_lstm = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_context_lstm)
+    results_c_lstm = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_context_lstm,
+                                                implicit_theta=False)
 
     best_base_rnn = bootstrap.get_best_model(experiment_name=exp_name, pref="baseline_RNN")
-    results_b_rnn = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_base_rnn)
+    results_b_rnn = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_base_rnn,
+                                               implicit_theta=True)
 
     best_base_lstm = bootstrap.get_best_model(experiment_name=exp_name, pref="baseline_LSTM")
-    results_b_lstm = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_base_lstm)
+    results_b_lstm = bootstrap.get_test_results(dataset=dataset, exp_name=exp_name, model_name=best_base_lstm,
+                                                implicit_theta=True)
 
     results_lr = bootstrap.get_lr_results(dataset=dataset, feature_cols=feature_cols, target_col=target_col)
 

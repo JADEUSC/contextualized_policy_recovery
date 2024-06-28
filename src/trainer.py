@@ -39,11 +39,15 @@ def init_run(experiment_name:str, dataset_name:str, bootstrap:Optional[int]=None
     run_path = STORAGE_PATH / dataset_name / experiment_name
     if bootstrap is not None:
         run_path = run_path / f"run_{bootstrap}"
-    
+
     if run_path.exists():
-        raise ValueError("This run already exists.")
+        None
     else:
         os.makedirs(run_path)
+    # if run_path.exists():
+    #     raise ValueError("This run already exists.")
+    # else:
+    #     os.makedirs(run_path)
     return run_path 
 
 
@@ -108,10 +112,50 @@ def L1_bce(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, lamb:floa
     return loss
 
 
+def L1_bce_global(pred:torch.Tensor, target:torch.Tensor, theta:torch.Tensor, beta:torch.Tensor,
+                  lamb:float, mask:torch.Tensor) -> torch.Tensor:
+    """Compute the L1 loss with a L1 regularization term on the coefficients.
+
+    Parameters
+    ----------
+    pred : torch.Tensor
+        Predicted probabilities.
+    target : torch.Tensor
+        True labels.
+    theta : torch.Tensor
+        Linear Coefficients.
+    lamb : float
+        Regularization coefficient.
+    mask : torch.Tensor
+        Mask to remove padded values.
+
+    Returns
+    -------
+    torch.Tensor
+        The loss.
+    """
+
+    zer_theta = torch.zeros_like(theta)
+    zer_beta = torch.zeros_like(beta)
+    reg = nn.L1Loss(reduction="none")
+    loss_fct = nn.BCELoss(reduction="none")
+
+    mask_l1 = mask.unsqueeze(-1).expand(theta.size())
+    mask_l1_beta = mask.unsqueeze(-1).expand(beta.size())
+
+    reg_theta = lamb * reg(theta, zer_theta) * mask_l1
+    reg_beta = lamb * reg(beta, zer_beta) * mask_l1_beta
+    bce = loss_fct(pred, target) * mask
+
+    loss = bce.sum()/mask.sum() + (reg_theta.sum()+reg_beta.sum()) / mask.sum()
+
+    return loss
+
+
 def train_contextual(exp_name:str, input_size:int, context_size:int, train_loader:torch.utils.data.DataLoader, 
                      val_loader:torch.utils.data.DataLoader, lr:float=5e-4, rnn_type:str="LSTM", 
-                     hidden_dims:List[int]=[16, 32, 64], lambdas:List[int]=[0.0001, 0.001, 0.01, 0.1], 
-                     bootstrap:Optional[int]=None, implicit_theta=False):
+                     hidden_dims:List[int]=[16, 32, 64], lambdas:List[float]=[0.0001, 0.001, 0.01, 0.1],
+                     alpha:float=0.8, bootstrap:Optional[int]=None, implicit_theta=False):
     """Train a contextualized model.
 
     Parameters
@@ -134,6 +178,8 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
         List of hidden states used for GridSearch. Defaults to [16, 32, 64].
     lambdas : List[int], optional
         List of regularization values lambdas. Defaults to [0, 0.001, 0.01, 0.1].
+    alpha: float, optional
+        Choose the ratio for using local:global information in policy recovery. 1 means using only local information.
     bootstrap : int, optional
         Number of bootstrap run. Defaults to None.
     implicit_theta: bool, optional
@@ -144,14 +190,15 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
         for lamb in lambdas:
             
             model_name = f"context_{rnn_type}_{hidden_dim}_{lamb}"
-            try:
-                run_path = init_run(model_name, dataset_name=exp_name, bootstrap=bootstrap)
-            except ValueError as e:
-                print(f"Run {model_name} already exists, skipping.")
-                continue
+            run_path = init_run(model_name, dataset_name=exp_name, bootstrap=bootstrap)
+            # try:
+            #     run_path = init_run(model_name, dataset_name=exp_name, bootstrap=bootstrap)
+            # except ValueError as e:
+            #     print(f"Run {model_name} already exists, skipping.")
+            #     continue
             
             model = contextualized_sigmoid(hidden_dim=hidden_dim, type=rnn_type, input_size=input_size, 
-                                           context_size=context_size, implicit_theta=implicit_theta)
+                                           context_size=context_size, implicit_theta=implicit_theta, alpha=alpha)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
             best_prev = 1000
@@ -177,20 +224,33 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
 
                     outs = []
                     thetas = []
+                    betas = []
+                    offset = torch.zeros((batch_size, ))
+
                     for step in range(context.size(-1)):
                         context_step = context[:, :,step].unsqueeze(-2)
                         features_step = features[:, :,step].unsqueeze(-2)
+                        target_step = targets[:, step:step+1].unsqueeze(-2)
 
-                        out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+                        if not implicit_theta:
+                            out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
+                                                                     target=target_step, hidden=hidden, offset=offset)
+                            betas.append(beta)
+                        else:
+                            out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
                         # we dont regularize the intercept
-                        thetas.append(theta[:,:-1])
+                        thetas.append(theta)
                         outs.append(out)
     
                     probs = torch.vstack(outs).T
                     thetas = torch.stack(thetas)
                     thetas = thetas.permute(1,0,2)
-
-                    loss = L1_bce(pred=probs, target=targets, theta=thetas, lamb=lamb, mask=mask)
+                    if not implicit_theta:
+                        betas = torch.stack(betas)
+                        betas = betas.permute(1,0,2)
+                        loss = L1_bce_global(pred=probs, target=targets, theta=thetas, beta=betas, lamb=lamb, mask=mask)
+                    else:
+                        loss = L1_bce(pred=probs, target=targets, theta=thetas, lamb=lamb, mask=mask)
                     loss.backward()
                     loss_train += loss.item()
 
@@ -207,18 +267,31 @@ def train_contextual(exp_name:str, input_size:int, context_size:int, train_loade
                     hidden = model.init_hidden(batch_size=batch_size, static=static)
                     outs = []
                     thetas = []
+                    betas = []
+                    offset = torch.zeros((batch_size,))
                     for step in range(context.size(-1)):
                         context_step = context[:, :,step].unsqueeze(-2)
                         features_step = features[:, :,step].unsqueeze(-2)
+                        target_step = targets[:, step:step + 1].unsqueeze(-2)
                         
-                        out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
+                        if not implicit_theta:
+                            out, hidden, theta, beta, offset = model(context=context_step, observation=features_step,
+                                                                     target=target_step, hidden=hidden, offset=offset)
+                            betas.append(beta)
+                        else:
+                            out, hidden, theta = model(context=context_step, observation=features_step, hidden=hidden)
                         outs.append(out)
                         thetas.append(theta)
 
-                    outs = torch.vstack(outs).T
+                    probs = torch.vstack(outs).T
                     thetas = torch.stack(thetas)
                     thetas = thetas.permute(1,0,2)
-                    loss = L1_bce(pred=outs, target=targets, theta=thetas, lamb=0.0, mask=mask)
+                    if not implicit_theta:
+                        betas = torch.stack(betas)
+                        betas = betas.permute(1, 0, 2)
+                        loss = L1_bce_global(pred=probs, target=targets, theta=thetas, beta=betas, lamb=lamb, mask=mask)
+                    else:
+                        loss = L1_bce(pred=probs, target=targets, theta=thetas, lamb=lamb, mask=mask)
                     v_losses.append(loss.item())
 
                 val_loss = np.mean(v_losses)
@@ -381,7 +454,7 @@ def train_vanilla(exp_name:str, train_loader:torch.utils.data.DataLoader, val_lo
         log_run(run_path = run_path, model=best_model, best_val=best_val, train_loss=train_losses, val_loss=val_losses)
 
 
-def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False)-> torch.nn.Module:
+def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False, alpha=0.8)-> torch.nn.Module:
     # Todo: remove add kwargs to logging, remove implicit_theta from kwargs here.    
     """Load a trained model
 
@@ -425,7 +498,8 @@ def load_run(run:str, dataset_name:str, bootstrap=None, implicit_theta=False)-> 
         input_size = 1
 
     try:
-        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size, implicit_theta=implicit_theta)
+        model = contextualized_sigmoid(hidden_dim=h, type=rnn_type, input_size=input_size, context_size=context_size,
+                                       implicit_theta=implicit_theta, alpha=alpha)
         model.load_state_dict(torch.load(run_path / "model.pt"))
     except RuntimeError:
         model = VanillaRnn(input_size=input_size, hidden_dim=h, rnn_type=rnn_type)
